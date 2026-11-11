@@ -17,7 +17,9 @@ function loadEnv(file) {
 }
 loadEnv(path.join(root, '.env'));
 
-const env = process.env;
+// Trim every setting: values pasted into hosting dashboards often carry a trailing newline/space,
+// which silently breaks things like the Google client ID ("invalid_client").
+const env = Object.fromEntries(Object.entries(process.env).map(([k, v]) => [k, typeof v === 'string' ? v.trim() : v]));
 const port = parseInt(env.PORT, 10) || 3000;
 // RENDER_EXTERNAL_URL is set automatically on Render.com
 const baseUrl = (env.BASE_URL || env.RENDER_EXTERNAL_URL || `http://localhost:${port}`).replace(/\/+$/, '');
