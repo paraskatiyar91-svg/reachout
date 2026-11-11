@@ -12,7 +12,7 @@
     "build": "node -e \"console.log('No build step needed')\"",
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node scripts/selftest.js"
+    "test": "node scripts/selftest.js && node scripts/storetest.js"
   },
   "license": "MIT"
 }

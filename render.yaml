@@ -2,9 +2,8 @@
 #   https://render.com/deploy?repo=https://github.com/paraskatiyar91-svg/reachout
 # Secrets marked `sync: false` are entered by you in the Render dashboard, never committed.
 #
-# NOTE: the free plan has no persistent disk. The app sleeps after ~15 min idle and
-# all saved data (users, contacts, drafts) is wiped when it restarts or redeploys.
-# For real use, switch `plan` to `starter` and uncomment the `disk` block.
+# NOTE: the free plan has no persistent disk, so set the two UPSTASH_* variables (free) and
+# all data is kept in Upstash Redis (encrypted) and survives restarts and redeploys.
 services:
   - type: web
     name: reachout
@@ -28,6 +27,11 @@ services:
       - key: GOOGLE_CLIENT_ID
         sync: false
       - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      # Free persistent storage (https://console.upstash.com). Without these, data resets on restart.
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
         sync: false
       - key: DAILY_SEND_LIMIT
         value: "40"

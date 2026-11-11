@@ -109,7 +109,7 @@ Download the template from the Contacts tab (Excel or CSV). Columns (header name
 | Abuse | Per-IP and per-user rate limits on auth, uploads, AI and sending |
 | Privacy | Users can disconnect Gmail (token revoked at Google) or **delete their account and all data** |
 
-**Never commit `.env` or the `data/` folder.** Both are in `.gitignore`.
+**Never change `ENCRYPTION_KEY` once you have users.** Stored data becomes unreadable. **Never commit `.env` or the `data/` folder.** Both are in `.gitignore`.
 
 ---
 
@@ -126,12 +126,14 @@ Download the template from the Contacts tab (Excel or CSV). Columns (header name
 
 The app detects its public URL and HTTPS automatically on Render (`RENDER_EXTERNAL_URL`).
 
-**Free-plan limits (demo use):**
-- The app **sleeps after ~15 min** with no visitors, and the first visit afterwards takes about 30 s to wake it.
-- The free plan has **no persistent disk**, so all users, contacts and drafts are **wiped whenever it restarts or redeploys**.
-- Sending runs inside the app, so **keep the Activity tab open while emails are sending**. Its auto-refresh keeps the app awake.
+**Keep data across restarts (free):** the Render free plan has no disk, so add free **Upstash Redis** storage:
+1. <https://console.upstash.com> → Create Database (Free) → copy the **REST URL** and **REST token**.
+2. In Render → Environment, set `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` → Save.
 
-**For real use:** in `render.yaml`, set `plan: starter` and uncomment the `disk` and `DATA_DIR` lines (about $7/month), or move storage to Postgres (`src/lib/db.js` is the only file to change).
+All records and files are **encrypted with `ENCRYPTION_KEY` before they reach Upstash**, so Upstash only stores ciphertext. Only changes are sent, so an idle app uses no commands (the free plan allows 500K/month). If storage is unreachable at startup, the app refuses to start rather than run on empty data.
+
+**Free-plan notes:** the app sleeps after about 15 min with no visitors, and the first visit afterwards takes about 30 s to wake it. Keep the Activity tab open while emails are sending, because its auto-refresh keeps the app awake.
+
 Back up `ENCRYPTION_KEY`. If you lose it, stored tokens and resumes cannot be decrypted.
 
 Other hosts (Railway, Fly.io, a VPS) also work. Run it behind HTTPS and set `BASE_URL=https://yourdomain.com` and `TRUST_PROXY=1`.

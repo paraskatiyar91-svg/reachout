@@ -52,12 +52,19 @@ const config = {
     clientSecret: env.GOOGLE_CLIENT_SECRET || '',
     redirectUri: `${baseUrl}/auth/google/callback`,
   },
+  // Optional persistent storage (free): https://console.upstash.com
+  upstash: {
+    url: (env.UPSTASH_REDIS_REST_URL || '').replace(/\/+$/, ''),
+    token: env.UPSTASH_REDIS_REST_TOKEN || '',
+  },
   send: {
     dailyLimit: Math.max(1, Math.min(500, num(env.DAILY_SEND_LIMIT, 40))),
     minDelay: Math.max(5, num(env.MIN_DELAY_SECONDS, 45)),
     maxDelay: Math.max(5, num(env.MAX_DELAY_SECONDS, 120)),
   },
   devAuth: env.DEV_FAKE_AUTH === '1',
+  // Google Search Console "HTML tag" code (public), proves domain ownership for app verification.
+  siteVerification: /^[A-Za-z0-9_-]{10,120}$/.test(env.GOOGLE_SITE_VERIFICATION || '') ? env.GOOGLE_SITE_VERIFICATION : '',
   dataDir: env.DATA_DIR ? path.resolve(env.DATA_DIR) : path.join(root, 'data'),
   publicDir: path.join(root, 'public'),
   maxUploadBytes: 5 * 1024 * 1024,
@@ -75,6 +82,8 @@ config.validate = function validate() {
   if (!!config.google.clientId !== !!config.google.clientSecret) {
     problems.push('Set both GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET (only one is set).');
   }
+  if (!!config.upstash.url !== !!config.upstash.token) problems.push('Set both UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN (only one is set).');
+  if (config.upstash.url && !config.upstash.url.startsWith('https://') && !config.devAuth) problems.push('UPSTASH_REDIS_REST_URL must start with https://');
   if (config.devAuth && config.secure) problems.push('DEV_FAKE_AUTH must not be enabled on an https (production) BASE_URL.');
   return problems;
 };

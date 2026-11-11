@@ -113,14 +113,11 @@ function newUser({ sub, email, name, picture, dev = false }) {
   };
 }
 
-function deleteResumeFile(user) {
+async function deleteResumeFile(user) {
   if (!user.resumeFile) return;
-  try {
-    fs.unlinkSync(path.join(db.uploadsDir, user.resumeFile.storedName));
-  } catch {
-    /* already gone */
-  }
+  const name = user.resumeFile.storedName;
   user.resumeFile = null;
+  await db.deleteFile(name);
 }
 
 const userContacts = (user) => (db.data.contacts[user.id] ||= []);
@@ -398,9 +395,9 @@ async function api(req, res, url) {
     } else {
       throw new HttpError(400, 'Upload a PDF, DOCX or TXT resume');
     }
-    deleteResumeFile(user);
+    await deleteResumeFile(user);
     const storedName = `${C.randomId()}.bin`;
-    fs.writeFileSync(path.join(db.uploadsDir, storedName), C.encryptBuffer(f.data), { mode: 0o600 });
+    await db.putFile(storedName, C.encryptBuffer(f.data));
     user.resumeFile = {
       storedName,
       originalName: path.basename(f.filename).replace(/[^\w.\- ()]/g, '_').slice(0, 100) || `resume${ext}`,
@@ -427,14 +424,14 @@ async function api(req, res, url) {
   }
 
   if (m === 'DELETE' && p === '/api/resume') {
-    deleteResumeFile(user);
+    await deleteResumeFile(user);
     db.save();
     return H.sendJson(res, 200, { user: publicUser(user) });
   }
 
   if (m === 'GET' && p === '/api/resume/file') {
     if (!user.resumeFile) throw new HttpError(404, 'No resume uploaded');
-    const data = C.decryptBuffer(fs.readFileSync(path.join(db.uploadsDir, user.resumeFile.storedName)));
+    const data = C.decryptBuffer(await db.getFile(user.resumeFile.storedName));
     H.securityHeaders(res, { csp: false });
     res.writeHead(200, {
       'Content-Type': user.resumeFile.mime,
@@ -705,7 +702,7 @@ async function api(req, res, url) {
     const b = await H.readJson(req);
     if (b.confirm !== 'DELETE') throw new HttpError(400, 'Type DELETE to confirm');
     if (user.gmail?.refreshTokenEnc) await google.revoke(C.decrypt(user.gmail.refreshTokenEnc));
-    deleteResumeFile(user);
+    await deleteResumeFile(user);
     for (const col of ['contacts', 'drafts', 'tailored', 'sendLog']) delete db.data[col][user.id];
     db.data.queue = db.data.queue.filter((j) => j.userId !== user.id);
     for (const [k, s] of Object.entries(db.data.sessions)) if (s.userId === user.id) delete db.data.sessions[k];
@@ -742,8 +739,11 @@ function serveStatic(req, res, p) {
   if (req.method !== 'GET' && req.method !== 'HEAD') throw new HttpError(405, 'Method not allowed');
   const file = staticFiles.get(p === '/' ? '/index.html' : p);
   if (!file) throw new HttpError(404, 'Not found');
-  const data = fs.readFileSync(file);
+  let data = fs.readFileSync(file);
   const ext = path.extname(file);
+  if (file.endsWith(`${path.sep}index.html`) && config.siteVerification) {
+    data = Buffer.from(data.toString('utf8').replace('<meta charset="utf-8">', `<meta charset="utf-8">\n  <meta name="google-site-verification" content="${config.siteVerification}">`));
+  }
   const headers = { 'Content-Type': MIME[ext], 'Content-Length': data.length, 'Cache-Control': 'no-cache' };
   if (ext === '.csv' || ext === '.xlsx') headers['Content-Disposition'] = H.contentDisposition('attachment', path.basename(file));
   res.writeHead(200, headers);
@@ -770,7 +770,7 @@ async function handle(req, res) {
   return serveStatic(req, res, url.pathname);
 }
 
-function main() {
+async function main() {
   const problems = config.validate();
   if (problems.length) {
     console.error('\nConfiguration problems:\n  - ' + problems.join('\n  - ') + '\n');
@@ -779,7 +779,12 @@ function main() {
   if (!config.google.clientId && !config.devAuth) {
     console.warn('WARNING: GOOGLE_CLIENT_ID/SECRET not set. The site runs, but nobody can sign in until you add them (see README section 2).');
   }
-  db.init();
+  try {
+    await db.init();
+  } catch (e) {
+    console.error(`\nCould not load data from storage: ${e.message}\nRefusing to start so existing data is not overwritten. Check UPSTASH_REDIS_REST_URL / TOKEN.\n`);
+    process.exit(1);
+  }
   mailer.startWorker();
 
   const server = http.createServer((req, res) => {
@@ -794,10 +799,10 @@ function main() {
   server.requestTimeout = 120_000;
   server.listen(config.port, () => {
     console.log(`ReachOut running at ${config.baseUrl}`);
-    console.log(`AI: per-user keys  |  Dev login: ${config.devAuth ? 'ON (simulated sends)' : 'off'}`);
+    console.log(`AI: per-user keys  |  Storage: ${db.isRemote() ? 'Upstash Redis (persistent)' : 'local file'}  |  Dev login: ${config.devAuth ? 'ON (simulated sends)' : 'off'}`);
   });
-  const shutdown = () => {
-    db.flush();
+  const shutdown = async () => {
+    await Promise.race([db.flush(), new Promise((r) => setTimeout(r, 8000))]);
     process.exit(0);
   };
   process.on('SIGINT', shutdown);

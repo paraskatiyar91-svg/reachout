@@ -57,7 +57,7 @@ async function buildAttachment(user, draft) {
   const mode = user.profile.attachMode || 'tailored';
   if (mode === 'none') return null;
   if (mode === 'original' && user.resumeFile) {
-    const blob = fs.readFileSync(path.join(db.uploadsDir, user.resumeFile.storedName));
+    const blob = await db.getFile(user.resumeFile.storedName);
     return { filename: user.resumeFile.originalName, mime: user.resumeFile.mime, data: decryptBuffer(blob) };
   }
   const t = await ensureTailored(user, draft.domain);
@@ -180,11 +180,11 @@ async function tick() {
       if (seen.has(job.userId)) continue; // at most one send per user per tick
       seen.add(job.userId);
       await processJob(job);
+      db.save();
     }
   } catch (e) {
     console.error('queue error', e);
   } finally {
-    db.save();
     running = false;
   }
 }
