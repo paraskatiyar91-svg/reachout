@@ -1,0 +1,18 @@
+{
+  "name": "reachout",
+  "version": "0.1.0",
+  "description": "Tailor your resume per domain and send personalised outreach emails to professors and HRs through your own Gmail.",
+  "main": "src/server.js",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "setup": "node scripts/setup.js",
+    "build": "node -e \"console.log('No build step needed')\"",
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node scripts/selftest.js"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,32 @@
+# One-click deploy on Render: https://render.com/deploy?repo=<your GitHub repo URL>
+# Secrets marked `sync: false` are entered by you in the Render dashboard, never committed.
+services:
+  - type: web
+    name: reachout
+    runtime: node
+    plan: starter            # needed for the persistent disk below (free plan wipes data on restart)
+    buildCommand: npm run build
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeploy: true
+    disk:
+      name: reachout-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATA_DIR
+        value: /var/data
+      - key: ENCRYPTION_KEY
+        generateValue: true  # random 256-bit key, created once by Render
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: DAILY_SEND_LIMIT
+        value: "40"

@@ -1,0 +1,4 @@
+Name,Email,Type,Organization,Domain,Description,Role
+Dr. Anjali Sharma,anjali.sharma@example.edu,Professor,IIT Delhi,Data Scientist,"Works on NLP for clinical text and low-resource Indian languages",Summer Research Intern
+Priya Mehta,priya.mehta@example.com,HR,XYZ Tech,Software Engineer,"Hiring backend interns, Java/Spring Boot, microservices",SDE Intern
+Rahul Verma,rahul.verma@example.com,HR,DataWorks Analytics,Data Analyst,"Looking for interns with SQL, Excel and Power BI dashboards",Data Analyst Intern
