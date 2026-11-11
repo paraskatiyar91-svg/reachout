@@ -1,25 +1,30 @@
-# One-click deploy on Render: https://render.com/deploy?repo=<your GitHub repo URL>
+# One-click deploy on Render (free plan):
+#   https://render.com/deploy?repo=https://github.com/paraskatiyar91-svg/reachout
 # Secrets marked `sync: false` are entered by you in the Render dashboard, never committed.
+#
+# NOTE: the free plan has no persistent disk. The app sleeps after ~15 min idle and
+# all saved data (users, contacts, drafts) is wiped when it restarts or redeploys.
+# For real use, switch `plan` to `starter` and uncomment the `disk` block.
 services:
   - type: web
     name: reachout
     runtime: node
-    plan: starter            # needed for the persistent disk below (free plan wipes data on restart)
+    plan: free
     buildCommand: npm run build
     startCommand: npm start
     healthCheckPath: /healthz
     autoDeploy: true
-    disk:
-      name: reachout-data
-      mountPath: /var/data
-      sizeGB: 1
+    # disk:
+    #   name: reachout-data
+    #   mountPath: /var/data
+    #   sizeGB: 1
     envVars:
       - key: NODE_VERSION
         value: "22"
-      - key: DATA_DIR
-        value: /var/data
+      # - key: DATA_DIR        # uncomment together with the disk block
+      #   value: /var/data
       - key: ENCRYPTION_KEY
-        generateValue: true  # random 256-bit key, created once by Render
+        generateValue: true    # random 256-bit key, created once by Render
       - key: GOOGLE_CLIENT_ID
         sync: false
       - key: GOOGLE_CLIENT_SECRET

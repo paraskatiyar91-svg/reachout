@@ -114,12 +114,30 @@ Download the template from the Contacts tab (Excel or CSV). Columns (header name
 
 ---
 
-## 6. Deploying (production)
+## 6. Deploy to Render (free)
 
-- Run behind **HTTPS** (required for Secure cookies and Google). Render, Railway, Fly.io or a VPS with nginx + Let's Encrypt all work.
-- Set `BASE_URL=https://yourdomain.com` and `TRUST_PROXY=1`, and add the https redirect URI in Google Cloud.
-- Mount a **persistent disk** for `data/`, or move storage to Postgres. `src/lib/db.js` is the only file to change.
-- Back up `ENCRYPTION_KEY`. If you lose it, stored tokens and resumes cannot be decrypted.
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/paraskatiyar91-svg/reachout)
+
+1. Click the button above and sign in to Render with GitHub.
+2. Render reads `render.yaml`. It generates `ENCRYPTION_KEY` for you and asks for:
+   - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (required, see section 2)
+   - `GEMINI_API_KEY` or `ANTHROPIC_API_KEY` (optional, leave the other empty)
+3. Click **Apply**. After about 2 minutes your app is live at `https://reachout-xxxx.onrender.com`.
+4. In Google Cloud → Credentials → your OAuth client, add the redirect URI
+   `https://reachout-xxxx.onrender.com/auth/google/callback`
+   and on the consent screen add that domain under **Authorized domains**.
+
+The app detects its public URL and HTTPS automatically on Render (`RENDER_EXTERNAL_URL`).
+
+**Free-plan limits (demo use):**
+- The app **sleeps after ~15 min** with no visitors, and the first visit afterwards takes about 30 s to wake it.
+- The free plan has **no persistent disk**, so all users, contacts and drafts are **wiped whenever it restarts or redeploys**.
+- Sending runs inside the app, so **keep the Activity tab open while emails are sending**. Its auto-refresh keeps the app awake.
+
+**For real use:** in `render.yaml`, set `plan: starter` and uncomment the `disk` and `DATA_DIR` lines (about $7/month), or move storage to Postgres (`src/lib/db.js` is the only file to change).
+Back up `ENCRYPTION_KEY`. If you lose it, stored tokens and resumes cannot be decrypted.
+
+Other hosts (Railway, Fly.io, a VPS) also work. Run it behind HTTPS and set `BASE_URL=https://yourdomain.com` and `TRUST_PROXY=1`.
 
 ---
 
