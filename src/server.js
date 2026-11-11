@@ -696,6 +696,9 @@ function main() {
     console.error('\nConfiguration problems:\n  - ' + problems.join('\n  - ') + '\n');
     process.exit(1);
   }
+  if (!config.google.clientId && !config.devAuth) {
+    console.warn('WARNING: GOOGLE_CLIENT_ID/SECRET not set. The site runs, but nobody can sign in until you add them (see README section 2).');
+  }
   db.init();
   mailer.startWorker();
 

@@ -119,13 +119,11 @@ Download the template from the Contacts tab (Excel or CSV). Columns (header name
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/paraskatiyar91-svg/reachout)
 
 1. Click the button above and sign in to Render with GitHub.
-2. Render reads `render.yaml`. It generates `ENCRYPTION_KEY` for you and asks for:
-   - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (required, see section 2)
-   - `GEMINI_API_KEY` or `ANTHROPIC_API_KEY` (optional, leave the other empty)
-3. Click **Apply**. After about 2 minutes your app is live at `https://reachout-xxxx.onrender.com`.
-4. In Google Cloud → Credentials → your OAuth client, add the redirect URI
-   `https://reachout-xxxx.onrender.com/auth/google/callback`
-   and on the consent screen add that domain under **Authorized domains**.
+2. Render reads `render.yaml` and generates `ENCRYPTION_KEY` for you. You can leave the Google and AI keys **empty for now**.
+3. Click **Apply**. After about 2 minutes your site is live at `https://reachout-xxxx.onrender.com`. Sign-in shows "not configured" until step 5.
+4. Do the Google Cloud setup (section 2) using the redirect URI
+   `https://reachout-xxxx.onrender.com/auth/google/callback`.
+5. In Render → your service → **Environment**, set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and (free) `GEMINI_API_KEY`, then save. Render redeploys automatically.
 
 The app detects its public URL and HTTPS automatically on Render (`RENDER_EXTERNAL_URL`).
 

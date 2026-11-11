@@ -80,8 +80,8 @@ config.validate = function validate() {
   if (!/^[0-9a-fA-F]{64}$/.test(config.encryptionKeyHex)) {
     problems.push('ENCRYPTION_KEY must be 64 hex characters (or base64 of 32 bytes). Run `npm run setup`.');
   }
-  if (!config.devAuth && (!config.google.clientId || !config.google.clientSecret)) {
-    problems.push('GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are required (or set DEV_FAKE_AUTH=1 for local testing).');
+  if (!!config.google.clientId !== !!config.google.clientSecret) {
+    problems.push('Set both GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET (only one is set).');
   }
   if (config.ai.provider === 'anthropic' && !config.ai.anthropicKey) problems.push('AI_PROVIDER=anthropic but ANTHROPIC_API_KEY is empty.');
   if (config.ai.provider === 'gemini' && !config.ai.geminiKey) problems.push('AI_PROVIDER=gemini but GEMINI_API_KEY is empty.');
