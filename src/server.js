@@ -16,6 +16,9 @@ const H = require('./lib/http');
 const { HttpError } = H;
 
 // ---------------------------------------------------------------- sessions
+const SESSION_IDLE_MS = 3 * 24 * 3600 * 1000; // signed out after 3 days of inactivity
+const MAX_SESSIONS_PER_USER = 10;
+
 function createSession(req, res, userId) {
   const old = H.getCookie(req, 'sid');
   if (old) delete db.data.sessions[C.sha256(old)]; // prevent session fixation
@@ -24,8 +27,12 @@ function createSession(req, res, userId) {
     userId,
     csrf: C.randomToken(24),
     createdAt: Date.now(),
+    lastSeenAt: Date.now(),
     expiresAt: Date.now() + config.sessionTtlMs,
   };
+  // keep only the newest sessions per user
+  const mine = Object.entries(db.data.sessions).filter(([, s]) => s.userId === userId).sort((a, b) => b[1].createdAt - a[1].createdAt);
+  for (const [k] of mine.slice(MAX_SESSIONS_PER_USER)) delete db.data.sessions[k];
   db.save();
   H.setCookie(res, 'sid', token, { maxAge: config.sessionTtlMs / 1000 });
 }
@@ -35,9 +42,15 @@ function getAuth(req) {
   if (!token) return null;
   const key = C.sha256(token);
   const session = db.data.sessions[key];
-  if (!session || session.expiresAt < Date.now()) return null;
+  const now = Date.now();
+  if (!session || session.expiresAt < now || (session.lastSeenAt || session.createdAt) + SESSION_IDLE_MS < now) return null;
   const user = db.data.users[session.userId];
-  return user ? { key, session, user } : null;
+  if (!user) return null;
+  if (now - (session.lastSeenAt || 0) > 15 * 60_000) {
+    session.lastSeenAt = now; // sliding idle timeout, written at most every 15 min
+    db.save();
+  }
+  return { key, session, user };
 }
 
 function requireAuth(req) {
@@ -56,7 +69,9 @@ function checkCsrf(req, session) {
 setInterval(() => {
   const now = Date.now();
   let changed = false;
-  for (const [k, s] of Object.entries(db.data.sessions)) if (s.expiresAt < now) (delete db.data.sessions[k], (changed = true));
+  for (const [k, s] of Object.entries(db.data.sessions)) {
+    if (s.expiresAt < now || (s.lastSeenAt || s.createdAt) + SESSION_IDLE_MS < now) (delete db.data.sessions[k], (changed = true));
+  }
   for (const [k, s] of Object.entries(db.data.oauthStates)) if (s.expiresAt < now) (delete db.data.oauthStates[k], (changed = true));
   if (changed) db.save();
 }, 10 * 60_000).unref();
@@ -472,7 +487,11 @@ async function api(req, res, url) {
     const domain = clip(url.searchParams.get('domain'), 80);
     if (!domain) throw new HttpError(400, 'Domain is required');
     if (!user.profile.resumeText.trim()) throw new HttpError(400, 'Add your resume text first');
-    const t = (db.data.tailored[user.id] || {})[mailer.domainKey(domain)] || (await mailer.ensureTailored(user, domain));
+    let t = (db.data.tailored[user.id] || {})[mailer.domainKey(domain)];
+    if (!t) {
+      H.rateLimit(`ai:${user.id}`, 60, 3600_000); // generating may call the user's AI key
+      t = await mailer.ensureTailored(user, domain);
+    }
     return sendPdf(res, renderResume(mailer.pdfProfile(user), t.resume), `${user.profile.fullName || 'Resume'} - ${domain}.pdf`);
   }
 
@@ -689,6 +708,14 @@ async function api(req, res, url) {
     });
   }
 
+  // ---- security: sign out everywhere
+  if (m === 'POST' && p === '/api/sessions/revoke-all') {
+    for (const [k, s] of Object.entries(db.data.sessions)) if (s.userId === user.id) delete db.data.sessions[k];
+    db.save();
+    H.clearCookie(res, 'sid');
+    return H.sendJson(res, 200, { ok: true });
+  }
+
   // ---- gmail + account
   if (m === 'POST' && p === '/api/gmail/disconnect') {
     if (user.gmail?.refreshTokenEnc) await google.revoke(C.decrypt(user.gmail.refreshTokenEnc));
@@ -724,6 +751,7 @@ const MIME = {
   '.png': 'image/png',
   '.ico': 'image/x-icon',
   '.csv': 'text/csv; charset=utf-8',
+  '.txt': 'text/plain; charset=utf-8',
   '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 };
 const staticFiles = new Map();
@@ -801,6 +829,7 @@ async function main() {
     console.log(`ReachOut running at ${config.baseUrl}`);
     console.log(`AI: per-user keys  |  Storage: ${db.isRemote() ? 'Upstash Redis (persistent)' : 'local file'}  |  Dev login: ${config.devAuth ? 'ON (simulated sends)' : 'off'}`);
   });
+  process.on('unhandledRejection', (e) => console.error('Unhandled rejection:', e && e.message));
   const shutdown = async () => {
     await Promise.race([db.flush(), new Promise((r) => setTimeout(r, 8000))]);
     process.exit(0);

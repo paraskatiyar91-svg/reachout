@@ -168,8 +168,13 @@ setInterval(() => {
 
 function clientIp(req) {
   if (config.trustProxy) {
+    // Use the RIGHTMOST entry: it is the one our hosting proxy appended. Earlier entries are
+    // whatever the client sent and can be faked to dodge rate limits.
     const xf = req.headers['x-forwarded-for'];
-    if (xf) return String(xf).split(',')[0].trim();
+    if (xf) {
+      const parts = String(xf).split(',').map((p) => p.trim()).filter(Boolean);
+      if (parts.length) return parts[parts.length - 1];
+    }
   }
   return req.socket.remoteAddress || 'unknown';
 }

@@ -254,6 +254,16 @@ function startMockAi() {
       'resume auto-fill finds phone, GitHub, LinkedIn');
     ok(!profileHints('Education 2019-2023 2023-2027').phone, 'auto-fill does not mistake years for a phone');
 
+    // security extras
+    r = await req('GET', '/.well-known/security.txt');
+    ok(r.status === 200 && r.data.toString().includes('Contact:'), 'security.txt published');
+    r = await req('POST', '/api/sessions/revoke-all', { json: {} });
+    ok(r.status === 200, 'sign out of all devices');
+    r = await req('GET', '/api/contacts');
+    ok(r.status === 401, 'old session rejected after sign-out-everywhere');
+    await req('POST', '/auth/dev-login', { headers: { Origin: BASE } });
+    csrf = (await req('GET', '/api/me')).data.csrfToken;
+
     // logout + account deletion
     r = await req('POST', '/api/account/delete', { json: { confirm: 'DELETE' } });
     ok(r.status === 200, 'account deleted');

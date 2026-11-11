@@ -76,7 +76,9 @@ async function pdfText(buffer) {
   }
   try {
     const out = [];
+    const deadline = Date.now() + 20_000;
     for (let n = 1; n <= Math.min(doc.numPages, MAX_PAGES); n++) {
+      if (Date.now() > deadline) throw new Error('PDF took too long to read. Try a .docx or paste the text.');
       const page = await doc.getPage(n);
       const { items } = await page.getTextContent();
       out.push(linesFromItems(items));

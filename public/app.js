@@ -283,6 +283,17 @@ async function viewProfile() {
 
   const aiCard = renderAiCard();
 
+  const sessionsCard = card('Security',
+    h('p', { class: 'muted' }, 'Signed in somewhere you no longer use, or lost a device? Sign out everywhere. You are also signed out automatically after 3 days of inactivity.'),
+    h('button', {
+      class: 'btn ghost',
+      onclick: (e) => withBusy(e.target, async () => {
+        if (!confirm('Sign out of ReachOut on all devices, including this one?')) return;
+        await api('/api/sessions/revoke-all', { method: 'POST' });
+        location.href = '/';
+      }),
+    }, 'Sign out of all devices'));
+
   const danger = card('Delete account',
     h('p', { class: 'muted' }, 'Permanently deletes your profile, resume, contacts, drafts and logs, and revokes Gmail access.'),
     h('button', {
@@ -307,6 +318,7 @@ async function viewProfile() {
     h('div', { class: 'savebar' }, save),
     gmailCard,
     aiCard,
+    sessionsCard,
     danger,
   );
 }

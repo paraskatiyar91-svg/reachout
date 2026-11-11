@@ -28,6 +28,9 @@ async function ensureTailored(user, domain, { force = false } = {}) {
   if (!force && cur && cur.sourceHash === hash && cur.ai === tag) return cur;
   const resume = await ai.tailorResume(user.profile, domain, cfg);
   store[key] = { domain, resume, sourceHash: hash, ai: tag, generatedAt: Date.now() };
+  // keep at most 30 tailored versions per user (oldest dropped) so storage can't be filled up
+  const keys = Object.keys(store).sort((a, b) => store[b].generatedAt - store[a].generatedAt);
+  for (const k of keys.slice(30)) delete store[k];
   db.save();
   return store[key];
 }
