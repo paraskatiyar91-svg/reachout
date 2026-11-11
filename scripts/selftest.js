@@ -26,7 +26,39 @@ function multipart(field, filename, data, extra = {}) {
   return { body: Buffer.concat(parts), type: `multipart/form-data; boundary=${b}` };
 }
 
+// ---- fake AI provider (Gemini + OpenAI shapes) ----
+const http = require('http');
+const GOOD_GEMINI = 'AIzaTEST-gemini-key-1234567890';
+const GOOD_OPENAI = 'sk-test-openai-key-abcdefghijkl';
+const seenKeys = [];
+const MOCK_EMAIL = { subject: 'Research on clinical NLP – Paras', body: 'Dear Prof. Sharma,\n\nAI-written body from the fake provider.' };
+const MOCK_RESUME = { headline: 'AI tailored headline', summary: 'AI summary', skills: [{ group: 'Core', items: ['Python', 'SQL'] }], experience: [], projects: [{ name: 'Readmission predictor', tech: 'scikit-learn', bullets: ['Built it'] }], education: [], achievements: [], keywordsMatched: ['Python'] };
+function startMockAi() {
+  return new Promise((resolve) => {
+    const srv = http.createServer((req, res) => {
+      let b = '';
+      req.on('data', (c) => (b += c));
+      req.on('end', () => {
+        const isGemini = req.url.startsWith('/gemini/');
+        const key = isGemini ? req.headers['x-goog-api-key'] : String(req.headers.authorization || '').replace(/^Bearer /, '');
+        seenKeys.push(key);
+        if (key !== GOOD_GEMINI && key !== GOOD_OPENAI) {
+          res.writeHead(401, { 'content-type': 'application/json' });
+          return res.end(JSON.stringify({ error: { message: 'API key not valid' } }));
+        }
+        const body = JSON.parse(b || '{}');
+        const sys = isGemini ? body.systemInstruction?.parts?.[0]?.text || '' : body.messages?.[0]?.content || '';
+        const out = JSON.stringify(/resume editor/.test(sys) ? MOCK_RESUME : /cold emails/.test(sys) ? MOCK_EMAIL : { ok: true });
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(isGemini ? { candidates: [{ content: { parts: [{ text: out }] } }] } : { choices: [{ message: { content: out } }] }));
+      });
+    });
+    srv.listen(0, () => resolve(srv));
+  });
+}
+
 (async () => {
+  const mockAi = await startMockAi();
   const env = {
     ...process.env,
     PORT: String(PORT),
@@ -40,6 +72,7 @@ function multipart(field, filename, data, extra = {}) {
     ANTHROPIC_API_KEY: '',
     GEMINI_API_KEY: '',
     MIN_DELAY_SECONDS: '5',
+    AI_TEST_BASE_URL: `http://127.0.0.1:${mockAi.address().port}`,
     MAX_DELAY_SECONDS: '5',
   };
   const srv = spawn(process.execPath, [path.join(root, 'src/server.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -159,6 +192,30 @@ function multipart(field, filename, data, extra = {}) {
     const prof = drafts.find((d) => d.contact.type === 'Professor');
     ok(drafts.length === 4 && prof.draft.body.includes('Prof. Sharma') && prof.draft.body.includes('NLP'), 'professor draft is personalised');
 
+    // ---- per-user AI keys
+    r = await req('PUT', '/api/ai/keys/gemini', { json: { apiKey: 'AIzaBAD-key-000000000000' } });
+    ok(r.status === 400 && /rejected your API key/.test(r.data.error), 'invalid AI key rejected with a clear message');
+    r = await req('PUT', '/api/ai/keys/gemini', { json: { apiKey: GOOD_GEMINI } });
+    ok(r.status === 200 && r.data.user.ai.active === 'gemini' && r.data.user.ai.keys.gemini.last4 === GOOD_GEMINI.slice(-4), "user's Gemini key connected + active");
+    ok(!JSON.stringify(r.data).includes(GOOD_GEMINI), 'API key is never sent back to the browser');
+    await new Promise((res) => setTimeout(res, 400));
+    ok(!fs.readFileSync(path.join(dataDir, 'db.json'), 'utf8').includes(GOOD_GEMINI), 'API key encrypted in the database');
+    seenKeys.length = 0;
+    r = await req('POST', '/api/drafts/generate', { json: { contactIds: [prof.contact.id] } });
+    ok(r.data.results[0].ok, 'draft regenerated with user AI');
+    r = await req('GET', '/api/drafts');
+    const aiDraft = r.data.drafts.find((d) => d.contact.id === prof.contact.id).draft;
+    ok(aiDraft.subject === MOCK_EMAIL.subject && aiDraft.body === MOCK_EMAIL.body, 'email written by the AI provider');
+    ok(seenKeys.length >= 2 && seenKeys.every((k) => k === GOOD_GEMINI), "provider called with this user's own key");
+    r = await req('PUT', '/api/ai/keys/openai', { json: { apiKey: GOOD_OPENAI, model: 'gpt-4o-mini' } });
+    ok(r.status === 200 && r.data.user.ai.active === 'openai', 'ChatGPT key connected and switched active');
+    r = await req('PUT', '/api/ai/active', { json: { provider: 'gemini' } });
+    ok(r.data.user.ai.active === 'gemini', 'switch active provider back to Gemini');
+    r = await req('DELETE', '/api/ai/keys/gemini');
+    ok(r.data.user.ai.active === 'openai' && !r.data.user.ai.keys.gemini, 'removing active key falls back to the other one');
+    r = await req('PUT', '/api/ai/keys/openai', { json: { model: 'bad model; rm -rf' } });
+    ok(r.status === 400, 'model name validated');
+
     // send without approval should fail
     r = await req('POST', '/api/send', { json: {} });
     ok(r.status === 400, 'cannot send unapproved drafts');
@@ -203,6 +260,7 @@ function multipart(field, filename, data, extra = {}) {
     failures++;
   } finally {
     srv.kill('SIGTERM');
+    mockAi.close();
   }
   console.log(failures ? `\n${failures} test(s) FAILED` : '\nAll tests passed');
   console.log(`(test data in ${dataDir})`);

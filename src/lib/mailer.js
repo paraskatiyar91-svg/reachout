@@ -23,9 +23,11 @@ async function ensureTailored(user, domain, { force = false } = {}) {
   const store = (db.data.tailored[user.id] ||= {});
   const hash = resumeHash(user.profile);
   const cur = store[key];
-  if (!force && cur && cur.sourceHash === hash && cur.ai === ai.aiEnabled()) return cur;
-  const resume = await ai.tailorResume(user.profile, domain);
-  store[key] = { domain, resume, sourceHash: hash, ai: ai.aiEnabled(), generatedAt: Date.now() };
+  const cfg = ai.userAi(user);
+  const tag = ai.aiTag(cfg);
+  if (!force && cur && cur.sourceHash === hash && cur.ai === tag) return cur;
+  const resume = await ai.tailorResume(user.profile, domain, cfg);
+  store[key] = { domain, resume, sourceHash: hash, ai: tag, generatedAt: Date.now() };
   db.save();
   return store[key];
 }

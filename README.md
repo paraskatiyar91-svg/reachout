@@ -23,7 +23,7 @@ npm start              # http://localhost:3000
 
 Click **Dev login**. Everything works, but emails are **simulated** and nothing is sent. Use this to try the app.
 
-Run the automated end-to-end test (36 checks: auth, CSRF, uploads, PDF/DOCX/XLSX parsing, drafts, queue, deletion):
+Run the automated end-to-end test (47 checks, including a fake AI provider: auth, CSRF, uploads, PDF/DOCX/XLSX parsing, drafts, queue, deletion):
 
 ```bash
 npm test
@@ -58,22 +58,21 @@ DEV_FAKE_AUTH=0
 
 ---
 
-## 3. AI tailoring (optional but recommended)
+## 3. AI tailoring: each user brings their own key
 
-Without a key, the app uses solid templates and formats your resume text into a clean PDF.
-For real per-domain tailoring and personalised emails, set **one** of these in `.env`:
+There is **no server-wide AI key**. Each user connects their own key in **Profile → AI assistant**:
 
-```env
-# Anthropic (Claude)
-ANTHROPIC_API_KEY=sk-ant-...
-ANTHROPIC_MODEL=claude-sonnet-5-5
+| Provider | Cost | Get a key |
+|---|---|---|
+| Google Gemini | **Free tier** | <https://aistudio.google.com/apikey> |
+| ChatGPT (OpenAI) | Paid credits | <https://platform.openai.com/api-keys> |
+| Claude (Anthropic) | Paid credits | <https://console.anthropic.com/settings/keys> |
 
-# or Google Gemini (has a free tier: aistudio.google.com)
-GEMINI_API_KEY=...
-GEMINI_MODEL=gemini-2.5-flash
-```
-
-The AI is instructed to **only reorder, rephrase and highlight** facts from your resume, never to invent skills or experience. You still review every email before it is sent.
+- Keys are tested before saving, stored encrypted (AES-256-GCM), and never sent back to the browser. Only the last 4 characters are shown.
+- A user can connect several and pick which one is active. The model name is editable.
+- Each user's AI calls use only their own key, so you, the app owner, pay nothing for AI.
+- Without a key, the app uses built-in templates and formats the resume text into a clean PDF.
+- The AI is instructed to **only reorder, rephrase and highlight** facts from the resume, never to invent skills or experience. Users review every email before it is sent.
 
 ---
 
@@ -99,7 +98,7 @@ Download the template from the Contacts tab (Excel or CSV). Columns (header name
 |---|---|
 | Sign-in | Google OAuth 2.0 Authorization Code flow with **PKCE** and a `state` parameter bound to a cookie |
 | Gmail permission | Only `gmail.send`. The app **cannot read** your inbox |
-| Tokens at rest | Gmail refresh/access tokens encrypted with **AES-256-GCM** |
+| Tokens at rest | Gmail refresh/access tokens and users' AI keys encrypted with **AES-256-GCM** |
 | Resumes at rest | Uploaded files encrypted with AES-256-GCM, random file names, `0600` permissions |
 | Sessions | Random 256-bit tokens, only a SHA-256 hash stored server-side, `HttpOnly` + `SameSite=Lax` + `Secure`/`__Host-` on https, rotated on login, 7-day expiry |
 | CSRF | Per-session token required on every write, plus an Origin check |
@@ -119,11 +118,11 @@ Download the template from the Contacts tab (Excel or CSV). Columns (header name
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/paraskatiyar91-svg/reachout)
 
 1. Click the button above and sign in to Render with GitHub.
-2. Render reads `render.yaml` and generates `ENCRYPTION_KEY` for you. You can leave the Google and AI keys **empty for now**.
+2. Render reads `render.yaml` and generates `ENCRYPTION_KEY` for you. You can leave the Google keys **empty for now**.
 3. Click **Apply**. After about 2 minutes your site is live at `https://reachout-xxxx.onrender.com`. Sign-in shows "not configured" until step 5.
 4. Do the Google Cloud setup (section 2) using the redirect URI
    `https://reachout-xxxx.onrender.com/auth/google/callback`.
-5. In Render → your service → **Environment**, set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and (free) `GEMINI_API_KEY`, then save. Render redeploys automatically.
+5. In Render → your service → **Environment**, set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`, then save. Render redeploys automatically. (No AI key here: users add their own.)
 
 The app detects its public URL and HTTPS automatically on Render (`RENDER_EXTERNAL_URL`).
 
@@ -161,4 +160,5 @@ scripts/selftest.js  end-to-end test
 
 - Text is extracted from PDF, DOCX and TXT resumes. **Scanned/image-only PDFs** have no text layer, so paste the text manually (OCR is a possible future addition).
 - JSON storage suits one server and hundreds of users. Move to Postgres to scale.
+- **Opening to everyone:** while the Google app is in *Testing* mode, only the up-to-100 *test users* you add can sign in. To let anyone sign in, click **Publish app** in Google Cloud and submit verification for the `gmail.send` scope (free). Google asks for the homepage, `/privacy.html` and `/terms.html` (both included) and a short demo video.
 - Ideas: reply detection (needs the `gmail.readonly` scope), automatic follow-ups after 5–7 days, an ATS match score per job description, and per-contact resume tweaks.

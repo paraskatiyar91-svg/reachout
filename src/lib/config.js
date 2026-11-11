@@ -35,9 +35,6 @@ function parseKey(v) {
   return '';
 }
 
-let aiProvider = (env.AI_PROVIDER || '').toLowerCase();
-if (!aiProvider) aiProvider = env.ANTHROPIC_API_KEY ? 'anthropic' : env.GEMINI_API_KEY ? 'gemini' : 'none';
-
 const num = (v, d) => (Number.isFinite(parseFloat(v)) ? parseFloat(v) : d);
 
 const config = {
@@ -52,13 +49,6 @@ const config = {
     clientId: env.GOOGLE_CLIENT_ID || '',
     clientSecret: env.GOOGLE_CLIENT_SECRET || '',
     redirectUri: `${baseUrl}/auth/google/callback`,
-  },
-  ai: {
-    provider: aiProvider,
-    anthropicKey: env.ANTHROPIC_API_KEY || '',
-    anthropicModel: env.ANTHROPIC_MODEL || 'claude-sonnet-5-5',
-    geminiKey: env.GEMINI_API_KEY || '',
-    geminiModel: env.GEMINI_MODEL || 'gemini-2.5-flash',
   },
   send: {
     dailyLimit: Math.max(1, Math.min(500, num(env.DAILY_SEND_LIMIT, 40))),
@@ -83,8 +73,6 @@ config.validate = function validate() {
   if (!!config.google.clientId !== !!config.google.clientSecret) {
     problems.push('Set both GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET (only one is set).');
   }
-  if (config.ai.provider === 'anthropic' && !config.ai.anthropicKey) problems.push('AI_PROVIDER=anthropic but ANTHROPIC_API_KEY is empty.');
-  if (config.ai.provider === 'gemini' && !config.ai.geminiKey) problems.push('AI_PROVIDER=gemini but GEMINI_API_KEY is empty.');
   if (config.devAuth && config.secure) problems.push('DEV_FAKE_AUTH must not be enabled on an https (production) BASE_URL.');
   return problems;
 };

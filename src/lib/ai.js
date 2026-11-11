@@ -1,7 +1,14 @@
 'use strict';
-// Resume + email tailoring. Uses Anthropic or Gemini if configured, else templates.
-const config = require('./config');
+// Resume + email tailoring with each USER's own AI key (Gemini, OpenAI/ChatGPT or Claude).
+// No server-wide AI key: if a user has not connected one, built-in templates are used.
+// Keys are only ever sent to the fixed provider URLs below (never to user-supplied URLs).
+const { decrypt } = require('./crypto');
 
+const PROVIDERS = {
+  gemini: { label: 'Google Gemini', defaultModel: 'gemini-2.5-flash', keyUrl: 'https://aistudio.google.com/apikey', free: true },
+  openai: { label: 'ChatGPT (OpenAI)', defaultModel: 'gpt-4o-mini', keyUrl: 'https://platform.openai.com/api-keys', free: false },
+  anthropic: { label: 'Claude (Anthropic)', defaultModel: 'claude-sonnet-5-5', keyUrl: 'https://console.anthropic.com/settings/keys', free: false },
+};
 const RESUME_SYSTEM = `You are an expert resume editor for students and early-career candidates.
 Tailor the candidate's resume for the target domain.
 STRICT RULES:
@@ -36,53 +43,103 @@ function extractJson(text) {
   return JSON.parse(t.slice(a, b + 1));
 }
 
-async function callAnthropic(system, user, maxTokens) {
-  const r = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'x-api-key': config.ai.anthropicKey,
-      'anthropic-version': '2023-06-01',
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({ model: config.ai.anthropicModel, max_tokens: maxTokens, system, messages: [{ role: 'user', content: user }] }),
-    signal: AbortSignal.timeout(90_000),
-  });
-  const body = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(`AI error: ${body?.error?.message || r.status}`);
-  return (body.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('');
+class AiError extends Error {
+  constructor(provider, status, message) {
+    const label = PROVIDERS[provider]?.label || 'AI';
+    const nice =
+      status === 401 || status === 403 || /api key|apikey|invalid.*key|unauthori[sz]ed/i.test(message || '')
+        ? `${label} rejected your API key. Check it in Profile → AI.`
+        : status === 429
+          ? `${label} rate limit or quota reached. Wait a minute or check your plan/credits.`
+          : status === 404
+            ? `${label} model not found. Check the model name in Profile → AI.`
+            : `${label} error: ${String(message || status).slice(0, 200)}`;
+    super(nice);
+    this.status = status;
+  }
 }
 
-async function callGemini(system, user, maxTokens) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(config.ai.geminiModel)}:generateContent`;
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: { 'x-goog-api-key': config.ai.geminiKey, 'content-type': 'application/json' },
-    body: JSON.stringify({
+// Test hook: only honoured in local dev mode (DEV_FAKE_AUTH=1), used by `npm test` to fake providers.
+const TEST_BASE = process.env.DEV_FAKE_AUTH === '1' && process.env.AI_TEST_BASE_URL ? process.env.AI_TEST_BASE_URL.replace(/\/+$/, '') : null;
+
+async function postJson(provider, url, headers, body) {
+  if (TEST_BASE) url = `${TEST_BASE}/${provider}${new URL(url).pathname}`;
+  let r;
+  try {
+    r = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...headers },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(90_000),
+    });
+  } catch (e) {
+    throw new AiError(provider, 0, e.name === 'TimeoutError' ? 'request timed out' : 'network error');
+  }
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new AiError(provider, r.status, data?.error?.message || data?.message);
+  return data;
+}
+
+const CALLERS = {
+  async gemini({ key, model }, system, user, maxTokens, json = true) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+    const d = await postJson('gemini', url, { 'x-goog-api-key': key }, {
       systemInstruction: { parts: [{ text: system }] },
       contents: [{ role: 'user', parts: [{ text: user }] }],
-      generationConfig: { responseMimeType: 'application/json', maxOutputTokens: maxTokens, temperature: 0.6 },
-    }),
-    signal: AbortSignal.timeout(90_000),
-  });
-  const body = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(`AI error: ${body?.error?.message || r.status}`);
-  return (body.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('');
-}
+      generationConfig: { ...(json ? { responseMimeType: 'application/json' } : {}), maxOutputTokens: maxTokens },
+    });
+    return (d.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('');
+  },
+  async openai({ key, model }, system, user, maxTokens, json = true) {
+    const d = await postJson('openai', 'https://api.openai.com/v1/chat/completions', { authorization: `Bearer ${key}` }, {
+      model,
+      max_completion_tokens: maxTokens,
+      ...(json ? { response_format: { type: 'json_object' } } : {}),
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+      ],
+    });
+    return d.choices?.[0]?.message?.content || '';
+  },
+  async anthropic({ key, model }, system, user, maxTokens) {
+    const d = await postJson('anthropic', 'https://api.anthropic.com/v1/messages', { 'x-api-key': key, 'anthropic-version': '2023-06-01' }, {
+      model,
+      max_tokens: maxTokens,
+      system,
+      messages: [{ role: 'user', content: user }],
+    });
+    return (d.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('');
+  },
+};
 
-async function complete(system, user, maxTokens) {
-  const fn = config.ai.provider === 'anthropic' ? callAnthropic : callGemini;
+async function complete(ai, system, user, maxTokens) {
   let lastErr;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      return extractJson(await fn(system, user, maxTokens));
+      return extractJson(await CALLERS[ai.provider](ai, system, user, maxTokens));
     } catch (e) {
       lastErr = e;
+      if (e instanceof AiError && e.status && e.status !== 429 && e.status < 500) break; // bad key etc: don't retry
     }
   }
   throw lastErr;
 }
 
-const aiEnabled = () => config.ai.provider === 'anthropic' || config.ai.provider === 'gemini';
+// Returns { provider, key, model } for the user's active AI connection, or null.
+function userAi(user) {
+  const a = user.ai;
+  const k = a && a.active && a.keys && a.keys[a.active];
+  if (!k || !PROVIDERS[a.active]) return null;
+  return { provider: a.active, key: decrypt(k.keyEnc), model: k.model || PROVIDERS[a.active].defaultModel };
+}
+const aiTag = (ai) => (ai ? `${ai.provider}:${ai.model}` : 'none');
+
+// Cheap call to verify a key works before saving it.
+async function testKey(provider, key, model) {
+  const out = await CALLERS[provider]({ key, model }, 'Reply with JSON only.', 'Return this JSON exactly: {"ok": true}', 300);
+  return typeof out === 'string';
+}
 
 // ---- sanitising AI output ----
 const str = (v, n) => (typeof v === 'string' ? v.trim().slice(0, n) : '');
@@ -110,12 +167,12 @@ function cleanResume(r) {
   };
 }
 
-async function tailorResume(profile, domain) {
-  if (!aiEnabled()) {
+async function tailorResume(profile, domain, ai) {
+  if (!ai) {
     return { headline: `${domain}`.slice(0, 160), raw: profile.resumeText };
   }
   const user = `<target>${domain}</target>\n<resume>\n${profile.resumeText}\n</resume>`;
-  return cleanResume(await complete(RESUME_SYSTEM, user, 3500));
+  return cleanResume(await complete(ai, RESUME_SYSTEM, user, 8000));
 }
 
 function resumeDigest(resume) {
@@ -165,18 +222,18 @@ function templateEmail(profile, contact, domain) {
   };
 }
 
-async function writeEmail(profile, contact, domain, resume) {
-  if (!aiEnabled()) return templateEmail(profile, contact, domain);
+async function writeEmail(profile, contact, domain, resume, ai) {
+  if (!ai) return templateEmail(profile, contact, domain);
   const user = [
     `<candidate>Name: ${profile.fullName}\nHeadline: ${profile.headline || ''}\nTarget domain: ${domain}</candidate>`,
     `<candidate_resume>${resumeDigest(resume)}</candidate_resume>`,
     `<recipient>Name: ${contact.name}\nType: ${contact.type}\nOrganization: ${contact.organization}\nDomain: ${contact.domain}\nRole/position: ${contact.role}\nDescription: ${contact.description}</recipient>`,
   ].join('\n');
-  const out = await complete(EMAIL_SYSTEM, user, 900);
+  const out = await complete(ai, EMAIL_SYSTEM, user, 3000);
   const subject = str(out.subject, 120);
   const body = str(out.body, 4000);
   if (!subject || !body) return templateEmail(profile, contact, domain);
   return { subject, body };
 }
 
-module.exports = { aiEnabled, tailorResume, writeEmail };
+module.exports = { PROVIDERS, userAi, aiTag, testKey, tailorResume, writeEmail, AiError };

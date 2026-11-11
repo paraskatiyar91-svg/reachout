@@ -169,12 +169,14 @@ function renderLogin() {
       h('h1', {}, 'Tailored resumes. Personal emails. Sent from your own Gmail.'),
       h('p', { class: 'lead' }, 'Upload your resume and a sheet of professors or HR contacts. ReachOut tailors your resume for each domain, drafts a personal email for every contact, lets you review everything, then sends gradually so you stay out of spam.'),
       h('ol', { class: 'steps' },
+        h('li', {}, 'Connect your own Gmail and your own AI key (Gemini has a free tier)'),
         h('li', {}, 'Fill your profile and pick target domains'),
         h('li', {}, 'Upload your resume'),
         h('li', {}, 'Upload contacts (.xlsx or .csv)'),
         h('li', {}, 'Review AI drafts, approve, send')),
       actions,
-      h('p', { class: 'fine' }, 'ReachOut only asks for permission to send email. It can never read your inbox. You can disconnect or delete all your data at any time.')),
+      h('p', { class: 'fine' }, 'ReachOut only asks for permission to send email. It can never read your inbox. You can disconnect or delete all your data at any time. ',
+        h('a', { href: '/privacy.html' }, 'Privacy Policy'), ' · ', h('a', { href: '/terms.html' }, 'Terms'))),
   );
 }
 
@@ -187,6 +189,7 @@ function checklist() {
     ['Resume', !!me.profile.resumeText.trim(), '#resume'],
     ['Contacts', (S.contactCount || 0) > 0, '#contacts'],
     ['Gmail connected', !!me.gmail, '#profile'],
+    ['AI connected', !!me.ai.active, '#profile'],
   ];
   return h('div', { class: 'checklist' }, items.map(([t, done, href]) => h('a', { href, class: done ? 'done' : '' }, h('span', { class: 'tick' }, done ? '✓' : ''), t)));
 }
@@ -277,6 +280,8 @@ async function viewProfile() {
         h('a', { class: 'btn primary', href: '/auth/google/gmail' }, 'Connect Gmail')),
   );
 
+  const aiCard = renderAiCard();
+
   const danger = card('Delete account',
     h('p', { class: 'muted' }, 'Permanently deletes your profile, resume, contacts, drafts and logs, and revokes Gmail access.'),
     h('button', {
@@ -300,8 +305,56 @@ async function viewProfile() {
       h('label', { class: 'check' }, optOut, ' Add a polite opt-out line ("reply and I won\'t email again") — recommended')),
     h('div', { class: 'savebar' }, save),
     gmailCard,
+    aiCard,
     danger,
   );
+}
+
+// ---------- AI keys (per user) ----------
+function renderAiCard() {
+  const P = S.cfg.aiProviders;
+  const mine = S.me.ai;
+  const rows = Object.entries(P).map(([id, info]) => {
+    const k = mine.keys[id];
+    const keyIn = h('input', { type: 'password', placeholder: k ? `Saved key ending ••••${k.last4} (paste to replace)` : 'Paste your API key', autocomplete: 'off', spellcheck: 'false' });
+    const modelIn = h('input', { value: k ? k.model : info.defaultModel, maxlength: 80, spellcheck: 'false' });
+    const save = h('button', { class: 'btn primary small', type: 'button' }, k ? 'Update & test' : 'Connect & test');
+    save.addEventListener('click', () => withBusy(save, async () => {
+      const r = await api(`/api/ai/keys/${id}`, { method: 'PUT', body: { apiKey: keyIn.value, model: modelIn.value } });
+      keyIn.value = '';
+      S.me = r.user;
+      toast(`${info.label} connected and working. It is now your active AI.`);
+      route();
+    }));
+    const remove = k ? h('button', {
+      class: 'btn ghost small', type: 'button',
+      onclick: (e) => withBusy(e.target, async () => {
+        if (!confirm(`Remove your ${info.label} key?`)) return;
+        S.me = (await api(`/api/ai/keys/${id}`, { method: 'DELETE' })).user;
+        route();
+      }),
+    }, 'Remove') : null;
+    const use = k && mine.active !== id ? h('button', {
+      class: 'btn ghost small', type: 'button',
+      onclick: (e) => withBusy(e.target, async () => {
+        S.me = (await api('/api/ai/active', { method: 'PUT', body: { provider: id } })).user;
+        toast(`Now using ${info.label}`);
+        route();
+      }),
+    }, 'Use this') : null;
+    return h('details', { class: 'aiprov', open: (mine.active === id || (!mine.active && id === 'gemini')) || null },
+      h('summary', {},
+        h('strong', {}, info.label), ' ',
+        info.free ? badge('free tier', 'ok') : badge('paid'), ' ',
+        mine.active === id ? badge('active', 'info') : k ? badge('connected') : null),
+      h('div', { class: 'grid2' },
+        field('API key', keyIn, h('span', {}, 'Get one at ', h('a', { href: info.keyUrl, target: '_blank', rel: 'noopener noreferrer' }, info.keyUrl.replace('https://', '')))),
+        field('Model', modelIn, `Default: ${info.defaultModel}`)),
+      h('div', { class: 'row' }, save, use, remove));
+  });
+  return card('AI assistant (your own key)',
+    h('p', { class: 'muted' }, 'Connect your own AI key. It is used only for your resumes and emails, stored encrypted, and never shown again after saving. Usage counts against your own free tier or credits. No key? The app still works with simple templates.'),
+    ...rows);
 }
 
 // ---------- resume ----------
@@ -373,7 +426,9 @@ async function viewResume() {
       h('p', { class: 'muted small' }, 'The AI only reorders, rephrases and highlights what is written here. It is instructed never to invent skills or experience.'),
       h('div', { class: 'savebar' }, saveText)),
     card('Tailored resumes by domain',
-      h('p', { class: 'muted' }, S.cfg.ai ? `AI tailoring is on (${S.cfg.ai}).` : 'AI is off (no API key set), so your resume text is formatted into a clean PDF without tailoring.'),
+      h('p', { class: 'muted' }, S.me.ai.active
+        ? `AI tailoring is on, using your ${S.cfg.aiProviders[S.me.ai.active].label} key.`
+        : ['No AI connected, so your resume text is formatted into a clean PDF without tailoring. ', h('a', { href: '#profile' }, 'Connect your free Gemini key'), ' for real tailoring.']),
       ...rows),
   );
 }

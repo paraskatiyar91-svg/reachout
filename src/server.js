@@ -75,6 +75,12 @@ function publicUser(user) {
     profile: user.profile,
     resumeFile: user.resumeFile ? { originalName: user.resumeFile.originalName, size: user.resumeFile.size, uploadedAt: user.resumeFile.uploadedAt } : null,
     gmail: user.gmail ? { email: user.gmail.email, connectedAt: user.gmail.connectedAt, simulated: !!user.dev } : null,
+    ai: {
+      active: user.ai?.active || null,
+      keys: Object.fromEntries(
+        Object.entries(user.ai?.keys || {}).map(([p, k]) => [p, { last4: k.last4, model: k.model, connectedAt: k.connectedAt }]),
+      ),
+    },
   };
 }
 
@@ -103,6 +109,7 @@ function newUser({ sub, email, name, picture, dev = false }) {
     },
     resumeFile: null,
     gmail: null,
+    ai: { active: null, keys: {} },
   };
 }
 
@@ -256,7 +263,7 @@ async function api(req, res, url) {
       config: {
         devAuth: config.devAuth,
         googleConfigured: !!config.google.clientId,
-        ai: ai.aiEnabled() ? config.ai.provider : null,
+        aiProviders: Object.fromEntries(Object.entries(ai.PROVIDERS).map(([k, v]) => [k, { label: v.label, defaultModel: v.defaultModel, keyUrl: v.keyUrl, free: v.free }])),
         dailyLimit: config.send.dailyLimit,
         minDelay: config.send.minDelay,
         maxDelay: config.send.maxDelay,
@@ -291,6 +298,57 @@ async function api(req, res, url) {
     }
     if (!next.fullName) throw new HttpError(400, 'Full name is required');
     user.profile = next;
+    db.save();
+    return H.sendJson(res, 200, { user: publicUser(user) });
+  }
+
+  // ---- per-user AI keys (Gemini / OpenAI / Claude)
+  let am;
+  if (m === 'PUT' && (am = /^\/api\/ai\/keys\/(gemini|openai|anthropic)$/.exec(p))) {
+    H.rateLimit(`aikey:${user.id}`, 20, 3600_000);
+    const provider = am[1];
+    const b = await H.readJson(req);
+    const model = clip(b.model, 80) || ai.PROVIDERS[provider].defaultModel;
+    if (!/^[A-Za-z0-9._:\-]+$/.test(model)) throw new HttpError(400, 'Invalid model name');
+    const store = (user.ai ||= { active: null, keys: {} });
+    store.keys ||= {};
+    const existing = store.keys[provider];
+    const apiKey = typeof b.apiKey === 'string' ? b.apiKey.trim() : '';
+    if (!apiKey && !existing) throw new HttpError(400, 'Paste your API key');
+    if (apiKey && !/^[\x21-\x7e]{16,400}$/.test(apiKey)) throw new HttpError(400, 'That does not look like an API key');
+    const keyToTest = apiKey || C.decrypt(existing.keyEnc);
+    try {
+      await ai.testKey(provider, keyToTest, model);
+    } catch (e) {
+      throw new HttpError(400, e.message);
+    }
+    store.keys[provider] = {
+      keyEnc: apiKey ? C.encrypt(apiKey) : existing.keyEnc,
+      last4: apiKey ? apiKey.slice(-4) : existing.last4,
+      model,
+      connectedAt: Date.now(),
+    };
+    if (!store.active || b.makeActive !== false) store.active = provider;
+    db.save();
+    return H.sendJson(res, 200, { user: publicUser(user) });
+  }
+
+  if (m === 'DELETE' && (am = /^\/api\/ai\/keys\/(gemini|openai|anthropic)$/.exec(p))) {
+    const store = user.ai || { active: null, keys: {} };
+    delete store.keys[am[1]];
+    if (store.active === am[1]) store.active = Object.keys(store.keys)[0] || null;
+    user.ai = store;
+    db.save();
+    return H.sendJson(res, 200, { user: publicUser(user) });
+  }
+
+  if (m === 'PUT' && p === '/api/ai/active') {
+    const b = await H.readJson(req);
+    const store = user.ai || { active: null, keys: {} };
+    if (b.provider === null) store.active = null;
+    else if (typeof b.provider === 'string' && store.keys[b.provider]) store.active = b.provider;
+    else throw new HttpError(400, 'Connect that AI provider first');
+    user.ai = store;
     db.save();
     return H.sendJson(res, 200, { user: publicUser(user) });
   }
@@ -509,8 +567,8 @@ async function api(req, res, url) {
       try {
         const domain = mailer.contactDomain(user, c);
         const t = await mailer.ensureTailored(user, domain);
-        const email = await ai.writeEmail(user.profile, c, domain, t.resume);
-        drafts[c.id] = { subject: email.subject, body: email.body, domain, approved: false, generatedAt: Date.now(), ai: ai.aiEnabled() };
+        const email = await ai.writeEmail(user.profile, c, domain, t.resume, ai.userAi(user));
+        drafts[c.id] = { subject: email.subject, body: email.body, domain, approved: false, generatedAt: Date.now(), ai: ai.aiTag(ai.userAi(user)) };
         c.status = 'drafted';
         delete c.lastError;
         results.push({ contactId: id, ok: true });
@@ -714,7 +772,7 @@ function main() {
   server.requestTimeout = 120_000;
   server.listen(config.port, () => {
     console.log(`ReachOut running at ${config.baseUrl}`);
-    console.log(`AI: ${ai.aiEnabled() ? config.ai.provider : 'off (template mode)'}  |  Dev login: ${config.devAuth ? 'ON (simulated sends)' : 'off'}`);
+    console.log(`AI: per-user keys  |  Dev login: ${config.devAuth ? 'ON (simulated sends)' : 'off'}`);
   });
   const shutdown = () => {
     db.flush();
