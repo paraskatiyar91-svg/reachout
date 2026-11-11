@@ -759,7 +759,7 @@ async function handle(req, res) {
   } catch {
     throw new HttpError(400, 'Bad URL');
   }
-  if (url.pathname === '/healthz') return H.sendJson(res, 200, { ok: true });
+  if (url.pathname === '/healthz') return H.sendJson(res, 200, { ok: true, storage: db.isRemote() ? 'upstash' : 'local', version: 6 });
   const ip = H.clientIp(req);
   H.rateLimit(`ip:${ip}`, 600, 60_000);
   if (url.pathname.startsWith('/auth/')) {
