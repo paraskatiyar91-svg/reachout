@@ -152,3 +152,21 @@ ul.plain li { display: flex; justify-content: space-between; gap: 12px; padding:
 .legal h2 { font-size: 18px; margin-top: 28px; }
 .legal li { margin: 4px 0; }
 .brand-link { text-decoration: none; color: inherit; }
+.progresshead { margin-bottom: 18px; }
+.progresshead h1 { margin-bottom: 4px; }
+.bar { height: 8px; background: var(--line); border-radius: 999px; overflow: hidden; margin-top: 10px; }
+.bar .fill { display: block; height: 100%; background: var(--ok); transition: width .3s; }
+.fill.w0 { width: 3%; } .fill.w1 { width: 20%; } .fill.w2 { width: 40%; } .fill.w3 { width: 60%; } .fill.w4 { width: 80%; } .fill.w5 { width: 100%; }
+.step { padding: 14px 18px; }
+.step.current { border-color: var(--accent); box-shadow: 0 0 0 3px var(--info-bg); }
+.step.done { opacity: .75; }
+.stephead { display: flex; gap: 12px; align-items: flex-start; }
+.stephead h2 { margin: 0; }
+.stephead p { margin: 2px 0 0; }
+.step.current .stephead, .step:not(.done) .stephead + * { margin-bottom: 10px; }
+.stepnum { flex: none; display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--info-bg); color: var(--info); font-weight: 700; }
+.step.done .stepnum { background: var(--ok-bg); color: var(--ok); }
+.step > div:not(.stephead) { margin-left: 40px; }
+.finish { border-color: var(--ok); }
+ol.mini { padding-left: 18px; margin: 6px 0 10px; }
+ol.mini li { margin: 3px 0; }

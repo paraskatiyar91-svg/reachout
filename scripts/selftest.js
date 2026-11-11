@@ -248,6 +248,11 @@ function startMockAi() {
     const { buildMime } = require(path.join(root, 'src/lib/google.js'));
     const mime = buildMime({ fromName: 'A', fromEmail: 'a@x.com', to: 'b@y.com\r\nBcc: evil@z.com', subject: 'Hi\r\nBcc: evil@z.com', text: 'hello' });
     ok(!/\r\nBcc:/i.test(mime), 'MIME headers cannot be injected');
+    const { profileHints } = require(path.join(root, 'src/lib/parsers.js'));
+    const hints = profileHints('Riya · +91 98765 43210 · github.com/riya-s · linkedin.com/in/riya-sharma\nB.Tech 2022 – 2026');
+    ok(hints.phone === '+91 98765 43210' && hints.github === 'https://github.com/riya-s' && hints.linkedin === 'https://www.linkedin.com/in/riya-sharma',
+      'resume auto-fill finds phone, GitHub, LinkedIn');
+    ok(!profileHints('Education 2019-2023 2023-2027').phone, 'auto-fill does not mistake years for a phone');
 
     // logout + account deletion
     r = await req('POST', '/api/account/delete', { json: { confirm: 'DELETE' } });

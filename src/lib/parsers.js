@@ -203,4 +203,22 @@ function rowsToContacts(rows) {
   return { contacts, errors };
 }
 
-module.exports = { unzip, parseXlsx, parseCsv, docxText, rowsToContacts, EMAIL_RE };
+// Pull phone / LinkedIn / GitHub from resume text to pre-fill the profile.
+function profileHints(text) {
+  const t = String(text || '');
+  const out = {};
+  const li = /(?:https?:\/\/)?(?:[a-z]{2,3}\.)?linkedin\.com\/in\/([A-Za-z0-9_%-]{3,100})/i.exec(t);
+  if (li) out.linkedin = `https://www.linkedin.com/in/${li[1]}`;
+  const gh = /(?:https?:\/\/)?(?:www\.)?github\.com\/([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))(?![A-Za-z0-9-])/i.exec(t);
+  if (gh && !/^(orgs|topics|features|about)$/i.test(gh[1])) out.github = `https://github.com/${gh[1]}`;
+  for (const m of t.matchAll(/(?:\+?\d{1,3}[\s.-]?)?(?:\(?\d{2,5}\)?[\s.-]?)?\d{3,5}[\s.-]?\d{4,5}/g)) {
+    const digits = m[0].replace(/\D/g, '');
+    if (digits.length >= 10 && digits.length <= 13 && !/^(19|20)\d{2}(19|20)\d{2}/.test(digits)) {
+      out.phone = m[0].trim();
+      break;
+    }
+  }
+  return out;
+}
+
+module.exports = { unzip, parseXlsx, parseCsv, docxText, rowsToContacts, profileHints, EMAIL_RE };

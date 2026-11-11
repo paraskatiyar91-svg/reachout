@@ -161,7 +161,7 @@ async function authRoutes(req, res, url) {
     if (a.user.dev) {
       a.user.gmail = { email: a.user.email, connectedAt: Date.now() };
       db.save();
-      return H.redirect(res, '/?ok=gmail_connected#profile');
+      return H.redirect(res, '/?ok=gmail_connected#start');
     }
     if (!config.google.clientId) return H.redirect(res, '/?error=google_not_configured');
     return startOAuth(res, 'gmail', { userId: a.user.id, loginHint: a.user.email });
@@ -190,34 +190,45 @@ async function authRoutes(req, res, url) {
     }
     if (!info.sub || !info.email || info.email_verified === false) return H.redirect(res, '/?error=email_unverified');
 
-    if (st.purpose === 'login') {
-      let user = Object.values(db.data.users).find((u) => u.googleSub === info.sub);
-      if (!user) {
-        user = newUser({ sub: info.sub, email: info.email, name: info.name, picture: info.picture });
-        db.data.users[user.id] = user;
-      } else {
-        Object.assign(user, { email: info.email, name: info.name || user.name, picture: info.picture || user.picture });
-      }
-      db.save();
-      createSession(req, res, user.id);
-      return H.redirect(res, '/');
-    }
-
-    if (st.purpose === 'gmail') {
-      const a = getAuth(req);
-      if (!a || a.user.id !== st.userId) return H.redirect(res, '/?error=signin_required');
-      if (!google.hasGmailScope(tokens)) return H.redirect(res, '/?error=gmail_scope#profile');
-      if (!tokens.refresh_token) return H.redirect(res, '/?error=no_refresh_token#profile');
-      if (a.user.gmail?.refreshTokenEnc) google.revoke(C.decrypt(a.user.gmail.refreshTokenEnc));
-      a.user.gmail = {
+    // Note: we never revoke the previous token when replacing it. Google revokes the whole grant
+    // (including the new token) when any token of it is revoked.
+    const storeGmail = (user) => {
+      user.gmail = {
         email: info.email,
         refreshTokenEnc: C.encrypt(tokens.refresh_token),
         accessTokenEnc: C.encrypt(tokens.access_token),
         accessExpiresAt: Date.now() + (tokens.expires_in || 3600) * 1000,
         connectedAt: Date.now(),
       };
+    };
+
+    if (st.purpose === 'login') {
+      let user = Object.values(db.data.users).find((u) => u.googleSub === info.sub);
+      const isNew = !user;
+      if (!user) {
+        user = newUser({ sub: info.sub, email: info.email, name: info.name, picture: info.picture });
+        db.data.users[user.id] = user;
+      } else {
+        Object.assign(user, { email: info.email, name: info.name || user.name, picture: info.picture || user.picture });
+      }
+      const granted = google.hasGmailScope(tokens);
+      if (granted && tokens.refresh_token) storeGmail(user);
       db.save();
-      return H.redirect(res, '/?ok=gmail_connected#profile');
+      createSession(req, res, user.id);
+      // Gmail permission was granted earlier but we hold no refresh token (e.g. server data was
+      // reset): bounce once through the consent screen to get a fresh one. Seamless for the user.
+      if (granted && !user.gmail) return startOAuth(res, 'gmail', { userId: user.id, loginHint: info.email });
+      return H.redirect(res, isNew ? '/#start' : '/');
+    }
+
+    if (st.purpose === 'gmail') {
+      const a = getAuth(req);
+      if (!a || a.user.id !== st.userId) return H.redirect(res, '/?error=signin_required');
+      if (!google.hasGmailScope(tokens)) return H.redirect(res, '/?error=gmail_scope#start');
+      if (!tokens.refresh_token) return H.redirect(res, '/?error=no_refresh_token#start');
+      storeGmail(a.user);
+      db.save();
+      return H.redirect(res, '/?ok=gmail_connected#start');
     }
     return H.redirect(res, '/?error=oauth_failed');
   }
@@ -400,8 +411,19 @@ async function api(req, res, url) {
     if (text && (fields.replaceText === '1' || !user.profile.resumeText.trim())) {
       user.profile.resumeText = text.slice(0, 20000);
     }
+    // Auto-fill empty profile fields (phone, LinkedIn, GitHub) from the resume.
+    const autofilled = [];
+    if (text) {
+      const hints = parsers.profileHints(text);
+      for (const [k, v] of Object.entries(hints)) {
+        if (v && !user.profile[k]) {
+          user.profile[k] = v;
+          autofilled.push(k);
+        }
+      }
+    }
     db.save();
-    return H.sendJson(res, 200, { user: publicUser(user), extracted: !!text, note });
+    return H.sendJson(res, 200, { user: publicUser(user), extracted: !!text, note, autofilled });
   }
 
   if (m === 'DELETE' && p === '/api/resume') {

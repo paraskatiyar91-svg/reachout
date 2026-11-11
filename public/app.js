@@ -40,6 +40,8 @@ function h(tag, attrs, ...kids) {
   }
   return el;
 }
+// Replace the main area, ignoring empty (null/false) parts.
+const setMain = (...kids) => $('#main').replaceChildren(...kids.flat().filter((k) => k !== null && k !== undefined && k !== false));
 const card = (title, ...kids) => h('section', { class: 'card' }, title ? h('h2', {}, title) : null, ...kids);
 const field = (label, input, hint) => h('label', { class: 'field' }, h('span', { class: 'label' }, label), input, hint ? h('small', { class: 'muted' }, hint) : null);
 const badge = (text, kind = '') => h('span', { class: `badge ${kind}` }, text);
@@ -131,11 +133,11 @@ function route() {
     return renderLogin();
   }
   nav.classList.remove('hidden');
-  const tab = (location.hash || '#profile').slice(1).split('?')[0];
-  const view = VIEWS[tab] ? tab : 'profile';
+  const tab = location.hash.slice(1).split('?')[0];
+  const view = VIEWS[tab] ? tab : (S.me.profile.resumeText && S.me.gmail ? 'contacts' : 'start');
   for (const a of nav.querySelectorAll('a')) a.classList.toggle('active', a.dataset.tab === view);
-  $('#main').replaceChildren(h('p', { class: 'muted center' }, 'Loading…'));
-  VIEWS[view]().catch((e) => $('#main').replaceChildren(card('Error', h('p', {}, e.message))));
+  setMain(h('p', { class: 'muted center' }, 'Loading…'));
+  VIEWS[view]().catch((e) => setMain(card('Error', h('p', {}, e.message))));
 }
 
 function showBannerFromQuery() {
@@ -157,23 +159,22 @@ function renderLogin() {
   const main = $('#main');
   const actions = h('div', { class: 'stack' });
   if (S.cfg.googleConfigured) {
-    actions.append(h('a', { class: 'btn primary big', href: '/auth/google/login' }, h('span', { class: 'g' }, 'G'), ' Sign in with Google'));
+    actions.append(h('a', { class: 'btn primary big', href: '/auth/google/login' }, h('span', { class: 'g' }, 'G'), ' Continue with Google'));
   } else {
     actions.append(h('p', { class: 'muted' }, 'Google sign-in is not configured yet. See README → "Google Cloud setup".'));
   }
   if (S.cfg.devAuth) {
     actions.append(h('form', { method: 'post', action: '/auth/dev-login' }, h('button', { class: 'btn ghost', type: 'submit' }, 'Dev login (local testing)')));
   }
-  main.replaceChildren(
+  setMain(
     h('div', { class: 'hero' },
       h('h1', {}, 'Tailored resumes. Personal emails. Sent from your own Gmail.'),
       h('p', { class: 'lead' }, 'Upload your resume and a sheet of professors or HR contacts. ReachOut tailors your resume for each domain, drafts a personal email for every contact, lets you review everything, then sends gradually so you stay out of spam.'),
       h('ol', { class: 'steps' },
-        h('li', {}, 'Connect your own Gmail and your own AI key (Gemini has a free tier)'),
-        h('li', {}, 'Fill your profile and pick target domains'),
-        h('li', {}, 'Upload your resume'),
-        h('li', {}, 'Upload contacts (.xlsx or .csv)'),
-        h('li', {}, 'Review AI drafts, approve, send')),
+        h('li', {}, 'Continue with Google: one click, no passwords'),
+        h('li', {}, 'Upload your resume. We fill in your profile'),
+        h('li', {}, 'Upload your contacts sheet'),
+        h('li', {}, 'Review the drafts and send')),
       actions,
       h('p', { class: 'fine' }, 'ReachOut only asks for permission to send email. It can never read your inbox. You can disconnect or delete all your data at any time. ',
         h('a', { href: '/privacy.html' }, 'Privacy Policy'), ' · ', h('a', { href: '/terms.html' }, 'Terms'))),
@@ -294,7 +295,7 @@ async function viewProfile() {
       }),
     }, 'Delete my account'));
 
-  $('#main').replaceChildren(
+  setMain(
     checklist(),
     card('Your details', details),
     card('Target domains', h('p', { class: 'muted' }, 'Pick every domain you are applying for. A tailored resume is generated for each.'), chips,
@@ -308,6 +309,164 @@ async function viewProfile() {
     aiCard,
     danger,
   );
+}
+
+// ---------- shared: generate drafts in batches ----------
+async function generateDrafts(ids, btn) {
+  let ok = 0;
+  const errs = [];
+  for (let i = 0; i < ids.length; i += 5) {
+    btn.textContent = `Drafting ${Math.min(i + 5, ids.length)}/${ids.length}…`;
+    const r = await api('/api/drafts/generate', { method: 'POST', body: { contactIds: ids.slice(i, i + 5) } });
+    for (const x of r.results) x.ok ? ok++ : errs.push(x.error);
+  }
+  toast(`${ok} draft(s) ready${errs.length ? `, ${errs.length} failed: ${errs[0]}` : ''}`, errs.length ? 'warn' : 'ok', 7000);
+  if (ok) location.hash = '#drafts';
+  else route();
+}
+
+const FIELD_NAMES = { phone: 'phone', linkedin: 'LinkedIn', github: 'GitHub' };
+async function uploadResume(fileInput, replace) {
+  if (!fileInput.files[0]) throw new Error('Choose your resume file first');
+  const fd = new FormData();
+  fd.append('file', fileInput.files[0]);
+  if (replace) fd.append('replaceText', '1');
+  const r = await api('/api/resume', { method: 'POST', form: fd });
+  S.me = r.user;
+  const filled = (r.autofilled || []).map((k) => FIELD_NAMES[k] || k);
+  if (r.extracted) toast(`Resume read successfully${filled.length ? `. Auto-filled your ${filled.join(', ')}` : ''}.`);
+  else toast(`Resume uploaded. ${r.note || 'Paste your resume text in the Resume tab.'}`, 'warn', 9000);
+  return r;
+}
+
+const skipStore = {
+  get(k) { try { return localStorage.getItem(`ro_skip_${k}`) === '1'; } catch { return false; } },
+  set(k) { try { localStorage.setItem(`ro_skip_${k}`, '1'); } catch { /* ignore */ } },
+};
+
+// ---------- get started (guided onboarding) ----------
+function setupState() {
+  const me = S.me;
+  return {
+    gmail: !!me.gmail,
+    resume: !!me.profile.resumeText.trim(),
+    domains: me.profile.domains.length > 0,
+    ai: !!me.ai.active || skipStore.get('ai'),
+    contacts: (S.contactCount || 0) > 0,
+  };
+}
+const setupDone = () => Object.values(setupState()).every(Boolean);
+
+async function viewStart() {
+  S.contactCount = (await api('/api/contacts')).contacts.length;
+  const st = setupState();
+  const order = ['gmail', 'resume', 'domains', 'ai', 'contacts'];
+  const current = order.find((k) => !st[k]);
+  const doneCount = order.filter((k) => st[k]).length;
+
+  const step = (key, n, title, sub, body) => h('section', { class: `card step ${st[key] ? 'done' : ''} ${current === key ? 'current' : ''}` },
+    h('div', { class: 'stephead' },
+      h('span', { class: 'stepnum' }, st[key] ? '✓' : n),
+      h('div', {}, h('h2', {}, title), h('p', { class: 'muted small' }, sub))),
+    current === key || (!st[key] && key === 'ai') ? body() : null);
+
+  // 1. Gmail
+  const gmailBody = () => h('div', {},
+    h('p', {}, 'Allow ReachOut to send emails from your Gmail. It can only send, never read your inbox.'),
+    h('a', { class: 'btn primary', href: '/auth/google/gmail' }, 'Connect Gmail'));
+
+  // 2. Resume
+  const resumeBody = () => {
+    const f = h('input', { type: 'file', accept: '.pdf,.docx,.txt' });
+    const b = h('button', { class: 'btn primary', type: 'button' }, 'Upload resume');
+    b.addEventListener('click', () => withBusy(b, async () => { await uploadResume(f, true); route(); }));
+    return h('div', {}, h('div', { class: 'row wrap' }, f, b),
+      h('small', { class: 'muted' }, 'PDF, Word or TXT. We read it and fill in your phone, LinkedIn and GitHub automatically. Prefer to paste text? ', h('a', { href: '#resume' }, 'Use the Resume tab'), '.'));
+  };
+
+  // 3. Domains (auto-saves)
+  const domainsBody = () => {
+    const selected = new Set(S.me.profile.domains);
+    const chips = h('div', { class: 'chips' });
+    const draw = () => chips.replaceChildren(...DOMAINS.map((d) => h('button', {
+      type: 'button', class: `chip ${selected.has(d) ? 'on' : ''}`,
+      onclick: () => { selected.has(d) ? selected.delete(d) : selected.add(d); draw(); },
+    }, d)));
+    draw();
+    const b = h('button', { class: 'btn primary', type: 'button' }, 'Save domains');
+    b.addEventListener('click', () => withBusy(b, async () => {
+      if (!selected.size) throw new Error('Pick at least one domain');
+      await saveProfile({ domains: [...selected] });
+      route();
+    }));
+    return h('div', {}, h('p', {}, 'What are you applying for? Pick all that apply. You get a tailored resume for each.'), chips, b);
+  };
+
+  // 4. AI (optional)
+  const aiBody = () => {
+    const key = h('input', { type: 'password', placeholder: 'Paste your Gemini API key', autocomplete: 'off', spellcheck: 'false' });
+    const b = h('button', { class: 'btn primary', type: 'button' }, 'Connect & test');
+    b.addEventListener('click', () => withBusy(b, async () => {
+      if (!key.value.trim()) throw new Error('Paste your key first');
+      S.me = (await api('/api/ai/keys/gemini', { method: 'PUT', body: { apiKey: key.value } })).user;
+      toast('Gemini connected. Your resumes and emails will be AI-tailored.');
+      route();
+    }));
+    const skip = h('button', { class: 'btn ghost', type: 'button', onclick: () => { skipStore.set('ai'); route(); } }, 'Skip, use templates');
+    return h('div', {},
+      h('ol', { class: 'mini' },
+        h('li', {}, 'Open ', h('a', { href: 'https://aistudio.google.com/apikey', target: '_blank', rel: 'noopener noreferrer' }, 'aistudio.google.com/apikey'), ' (signs in with the same Google account).'),
+        h('li', {}, 'Click ', h('strong', {}, 'Create API key'), ', then copy it.'),
+        h('li', {}, 'Paste it here. It is stored encrypted and only used for your drafts.')),
+      h('div', { class: 'row wrap' }, key, b, skip),
+      h('small', { class: 'muted' }, 'Prefer ChatGPT or Claude? Add them in ', h('a', { href: '#profile' }, 'Profile → AI assistant'), '.'));
+  };
+
+  // 5. Contacts
+  const contactsBody = () => {
+    const f = h('input', { type: 'file', accept: '.xlsx,.csv' });
+    const b = h('button', { class: 'btn primary', type: 'button' }, 'Upload contacts');
+    b.addEventListener('click', () => withBusy(b, async () => {
+      if (!f.files[0]) throw new Error('Choose your .xlsx or .csv file first');
+      const fd = new FormData();
+      fd.append('file', f.files[0]);
+      const r = await api('/api/contacts/upload', { method: 'POST', form: fd });
+      toast(`${r.added} contacts added${r.errors.length ? `, ${r.errors.length} rows skipped` : ''}`);
+      route();
+    }));
+    return h('div', {},
+      h('p', {}, 'A sheet with Name, Email, Type (Professor/HR), Organization, Domain, Description. ',
+        h('a', { href: '/contacts_template.xlsx' }, 'Download the Excel template'), '.'),
+      h('div', { class: 'row wrap' }, f, b));
+  };
+
+  let finish = null;
+  if (setupDone()) {
+    const go = h('button', { class: 'btn primary big', type: 'button' }, `Write emails for all ${S.contactCount} contacts`);
+    go.addEventListener('click', () => withBusy(go, async () => {
+      const { contacts } = await api('/api/contacts');
+      const ids = contacts.filter((c) => c.status === 'new').map((c) => c.id);
+      if (!ids.length) { location.hash = '#drafts'; return; }
+      await generateDrafts(ids, go);
+    }));
+    finish = h('section', { class: 'card finish' },
+      h('h2', {}, "You're all set 🎉"),
+      h('p', {}, 'Next: we write a personal email and a tailored resume for every contact. You review and approve each one before anything is sent.'),
+      go);
+  }
+
+  setMain(...[
+    h('div', { class: 'progresshead' },
+      h('h1', {}, `Welcome${S.me.profile.fullName ? `, ${S.me.profile.fullName.split(' ')[0]}` : ''}!`),
+      h('p', { class: 'muted' }, `${doneCount} of 5 steps done. Takes about 3 minutes.`),
+      h('div', { class: 'bar' }, h('span', { style: null, class: `fill w${doneCount}` }))),
+    finish,
+    step('gmail', 1, 'Connect your Gmail', st.gmail ? `Sending from ${S.me.gmail.email}` : 'So emails go out from your own address', gmailBody),
+    step('resume', 2, 'Upload your resume', st.resume ? 'Resume added' : 'We read it and fill in your profile', resumeBody),
+    step('domains', 3, 'Pick your domains', st.domains ? S.me.profile.domains.join(', ') : 'Software Engineer, Data Analyst, …', domainsBody),
+    step('ai', 4, 'Connect AI (optional, free)', S.me.ai.active ? `Using ${S.cfg.aiProviders[S.me.ai.active].label}` : skipStore.get('ai') ? 'Skipped. Using templates.' : 'Free Gemini key, 1 minute', aiBody),
+    step('contacts', 5, 'Upload contacts', st.contacts ? `${S.contactCount} contacts` : 'Professors and HRs to email', contactsBody),
+  ].filter(Boolean));
 }
 
 // ---------- AI keys (per user) ----------
@@ -417,7 +576,7 @@ async function viewResume() {
     })
     : [h('p', { class: 'muted' }, 'Pick your target domains in the Profile tab first.')];
 
-  $('#main').replaceChildren(
+  setMain(
     card('Resume file', current,
       h('div', { class: 'row wrap' }, file, upBtn),
       h('label', { class: 'check' }, replace, ' Replace my current resume text with the text from this file'),
@@ -509,19 +668,7 @@ async function viewContacts() {
       h('td', {}, badge(c.status, statusKind[c.status]), c.lastError ? h('div', { class: 'err small', title: c.lastError }, c.lastError.slice(0, 60)) : null));
   }));
 
-  genBtn.addEventListener('click', () => withBusy(genBtn, async () => {
-    const ids = [...sel];
-    let ok = 0;
-    const errs = [];
-    for (let i = 0; i < ids.length; i += 5) {
-      genBtn.textContent = `Drafting ${Math.min(i + 5, ids.length)}/${ids.length}…`;
-      const r = await api('/api/drafts/generate', { method: 'POST', body: { contactIds: ids.slice(i, i + 5) } });
-      for (const x of r.results) x.ok ? ok++ : errs.push(x.error);
-    }
-    toast(`${ok} draft(s) ready${errs.length ? `, ${errs.length} failed: ${errs[0]}` : ''}`, errs.length ? 'warn' : 'ok', 7000);
-    if (ok) location.hash = '#drafts';
-    else route();
-  }));
+  genBtn.addEventListener('click', () => withBusy(genBtn, () => generateDrafts([...sel], genBtn)));
   delBtn.addEventListener('click', () => withBusy(delBtn, async () => {
     if (!confirm(`Delete ${sel.size} contact(s) and their drafts?`)) return;
     await api('/api/contacts/delete', { method: 'POST', body: { ids: [...sel] } });
@@ -529,7 +676,7 @@ async function viewContacts() {
   }));
   updateBar();
 
-  $('#main').replaceChildren(
+  setMain(
     card('Upload contacts',
       h('p', {}, 'Columns: ', h('code', {}, 'Name, Email, Type, Organization, Domain, Description, Role'), '. Only Email is required. ',
         'Template: ', h('a', { href: '/contacts_template.xlsx' }, 'Excel'), ' · ', h('a', { href: '/contacts_template.csv' }, 'CSV')),
@@ -626,7 +773,7 @@ async function viewDrafts() {
           h('label', { class: 'check approve' }, appr, ' Approved'))));
   });
 
-  main.replaceChildren(
+  setMain(
     warn,
     h('div', { class: 'card toolbar sticky' },
       h('span', {}, h('strong', {}, `${drafts.length} drafts`), ` · ${approvedCount} approved and ready`),
@@ -645,7 +792,7 @@ async function viewActivity() {
       await api('/api/queue/cancel', { method: 'POST' });
       draw();
     }));
-    $('#main').replaceChildren(
+    setMain(
       h('div', { class: 'stats' },
         h('div', { class: 'stat' }, h('b', {}, a.pending.length), h('span', {}, 'queued')),
         h('div', { class: 'stat' }, h('b', {}, `${a.sentLast24h}/${a.dailyLimit}`), h('span', {}, 'sent in last 24h')),
@@ -670,13 +817,13 @@ async function viewActivity() {
   S.timer = setInterval(() => draw().catch(() => {}), 10_000);
 }
 
-const VIEWS = { profile: viewProfile, resume: viewResume, contacts: viewContacts, drafts: viewDrafts, activity: viewActivity };
+const VIEWS = { start: viewStart, profile: viewProfile, resume: viewResume, contacts: viewContacts, drafts: viewDrafts, activity: viewActivity };
 
 (async function boot() {
   try {
     await loadMe();
   } catch (e) {
-    $('#main').replaceChildren(card('Cannot reach server', h('p', {}, e.message)));
+    setMain(card('Cannot reach server', h('p', {}, e.message)));
     return;
   }
   showBannerFromQuery();

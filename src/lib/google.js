@@ -11,7 +11,9 @@ const SEND_URL = 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send';
 const GMAIL_SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send';
 
 const SCOPES = {
-  login: 'openid email profile',
+  // One-click onboarding: sign-in + send-only Gmail permission in a single Google consent.
+  // gmail.send still can never read the inbox. Users can untick it and connect later.
+  login: `openid email profile ${GMAIL_SEND_SCOPE}`,
   // gmail.send = can only SEND mail. The app can never read the user's inbox.
   gmail: `openid email ${GMAIL_SEND_SCOPE}`,
 };
@@ -26,13 +28,10 @@ function authUrl({ purpose, state, challenge, loginHint }) {
     code_challenge: challenge,
     code_challenge_method: 'S256',
   });
-  if (purpose === 'gmail') {
-    p.set('access_type', 'offline'); // we need a refresh token for background sending
-    p.set('prompt', 'consent');
-    p.set('include_granted_scopes', 'true');
-  } else {
-    p.set('prompt', 'select_account');
-  }
+  p.set('access_type', 'offline'); // refresh token so queued emails can be sent in the background
+  p.set('include_granted_scopes', 'true');
+  // 'gmail' (re)connect forces the consent screen so Google always returns a fresh refresh token.
+  p.set('prompt', purpose === 'gmail' ? 'consent' : 'select_account');
   if (loginHint) p.set('login_hint', loginHint);
   return `${AUTH_URL}?${p}`;
 }
